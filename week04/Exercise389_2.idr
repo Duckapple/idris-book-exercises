@@ -6,6 +6,8 @@ data Input = COIN
            | CHANGE 
            | REFILL Nat
 
+data CoinResult = Inserted | Rejected
+
 strToInput : String -> Maybe Input
 strToInput "insert" = Just COIN
 strToInput "vend" = Just VEND
@@ -14,28 +16,33 @@ strToInput x = if all isDigit (unpack x)
                   then Just (REFILL (cast x))
                   else Nothing
 
-data MachineCmd : Type -> VendState -> VendState -> Type where
-     InsertCoin : MachineCmd () (pounds, chocs)     (S pounds, chocs)
-     Vend       : MachineCmd () (S pounds, S chocs) (pounds, chocs)
-     GetCoins   : MachineCmd () (pounds, chocs)     (Z, chocs)
+data MachineCmd : (ty: Type) -> VendState -> (ty -> VendState) -> Type where
+     InsertCoin : MachineCmd CoinResult (pounds, chocs)
+                              (\res => case res of
+                                   Inserted => (S pounds, chocs)
+                                   Rejected => (pounds, chocs))
+     Vend       : MachineCmd () (S pounds, S chocs) (const (pounds, chocs))
+     GetCoins   : MachineCmd () (pounds, chocs)     (const (Z, chocs))
 
      Display : String -> 
-                  MachineCmd () state               state
+                  MachineCmd () state               (const state)
      Refill : (bars : Nat) -> 
-                  MachineCmd () (Z, chocs)          (Z, bars + chocs)
+                  MachineCmd () (Z, chocs)          (const (Z, bars + chocs))
 
-     GetInput : MachineCmd (Maybe Input) state state 
+     GetInput : MachineCmd (Maybe Input) state (const state)
 
-     Pure : ty -> MachineCmd ty state state
-     (>>=) : MachineCmd a state1 state2 -> (a -> MachineCmd b state2 state3) ->
-             MachineCmd b state1 state3
+     Pure : ty -> MachineCmd ty state (const state)
+     (>>=) : MachineCmd a state1 state2Fn -> ((r: a) -> MachineCmd b (state2Fn r) state3Fn) ->
+             MachineCmd b state1 state3Fn
 
 data MachineIO : VendState -> Type where
-     Do : MachineCmd a state1 state2 ->
-          (a -> Inf (MachineIO state2)) -> MachineIO state1
+     Do : MachineCmd a state1 state2f ->
+          ((x:a) -> Inf (MachineIO (state2f x))) -> MachineIO state1
 
-runMachine : MachineCmd ty inState outState -> IO ty
-runMachine InsertCoin = putStrLn "Coin inserted"
+runMachine : MachineCmd ty inState outStateF -> IO ty
+runMachine InsertCoin = do
+     putStrLn "Coin inserted"
+     pure Inserted
 runMachine Vend = putStrLn "Please take your chocolate"
 runMachine {inState = (pounds, _)} GetCoins 
      = putStrLn (show pounds ++ " coins returned")
@@ -43,11 +50,12 @@ runMachine (Display str) = putStrLn str
 runMachine (Refill bars)
      = putStrLn ("Chocolate remaining: " ++ show bars)
 runMachine {inState = (pounds, chocs)} GetInput
-     = do putStrLn ("Coins: " ++ show pounds ++ "; " ++
+     = do
+       putStrLn ("Coins: " ++ show pounds ++ "; " ++
                     "Stock: " ++ show chocs)
-          putStr "> "
-          x <- getLine
-          pure (strToInput x)
+       putStr "> "
+       x <- getLine
+       pure (strToInput x)
 runMachine (Pure x) = pure x
 runMachine (cmd >>= prog) = do x <- runMachine cmd
                                runMachine (prog x)
@@ -66,8 +74,8 @@ run Dry p = pure ()
 
 
 namespace MachineDo
-  (>>=) : MachineCmd a state1 state2 ->
-          (a -> Inf (MachineIO state2)) -> MachineIO state1
+  (>>=) : MachineCmd a state1 state2f ->
+          ((x:a) -> Inf (MachineIO (state2f x))) -> MachineIO state1
   (>>=) = Do
 
 mutual
@@ -88,10 +96,10 @@ mutual
 
   machineLoop : MachineIO (pounds, chocs)
   machineLoop =
-       do Just x <- GetInput | Nothig => do Display "Invalid input"
-                                            machineLoop
+       do Just x <- GetInput | Nothing => do Display "Invalid input"
+                                             machineLoop
           case x of
-              COIN => do InsertCoin
+              COIN => do Inserted <- InsertCoin | Rejected => machineLoop
                          machineLoop
               VEND => vend
               CHANGE => do GetCoins

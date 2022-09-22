@@ -1,11 +1,14 @@
 data Access = LoggedOut | LoggedIn
 data PwdCheck = Correct | Incorrect | Correctish
 
+chkToAccess : PwdCheck -> Access
+chkToAccess Correct = LoggedIn
+chkToAccess _ = LoggedOut
 
 data ShellCmd : (ty : Type) -> Access -> (ty -> Access) -> Type where
-  Password : String -> ShellCmd PwdCheck ?password_in ?password_out
-  Logout : ShellCmd () ?logout_in ?logout_out
-  GetSecret : ShellCmd String ?getsecret_in ?getsecret_out
+  Password : String -> ShellCmd PwdCheck LoggedOut (Main.chkToAccess)
+  Logout : ShellCmd () LoggedIn (const LoggedOut)
+  GetSecret : ShellCmd String LoggedIn (const LoggedIn)
 
   PutStr : String -> ShellCmd () state (const state)
   Pure : (res : ty) -> ShellCmd ty (state_fn res) state_fn 
